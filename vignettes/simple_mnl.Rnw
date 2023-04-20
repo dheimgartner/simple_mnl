@@ -1,0 +1,170 @@
+\documentclass[a4paper]{article}
+\usepackage{graphics}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[font={small,sl}]{caption}
+\usepackage[inline]{enumitem}
+\usepackage{indentfirst}
+\usepackage[utf8]{inputenc}
+\usepackage{natbib}
+\usepackage{siunitx}
+\usepackage{xspace}
+% \SweaveUTF8
+
+\newcommand{\COii}{\ensuremath{\mathit{CO}_{2}}\xspace}
+\newcommand*{\mat}[1]{\mathsf{#1}}
+\newcommand{\likelihood}{\mathcal{L}}% likelihood
+\newcommand{\loglik}{\ell}% log likelihood
+\newcommand{\me}{\mathrm{e}} % Konstant e=2,71828
+\newcommand{\R}{\texttt{R}\xspace}
+\newcommand*{\transpose}{^{\mkern-1.5mu\mathsf{T}}}
+\renewcommand*{\vec}[1]{\boldsymbol{#1}}
+
+% \VignetteIndexEntry{Introduction: what is maximum likelihood}
+
+\begin{document}
+\SweaveOpts{concordance=TRUE}
+<<foo,include=FALSE,echo=FALSE>>=
+options(keep.source = TRUE, width = 60,
+        try.outFile=stdout()  # make try to produce error messages
+)
+set.seed(34)
+@
+
+\title{Understanding the mechanics of a simple MNL}
+\author{Daniel Heimgartner}
+\maketitle
+
+\section{Introduction}
+
+This should illustrate the mechanics of discrete choice modeling and explain the gist of packages such as \texttt{apollo} and \texttt{mixl}. More complicated models are not much more difficult to code (however usually involve taking random draws since there exists no closed-form solution for the likelihood function (integral). If you understand the implementation of a simple MNL it is not too difficult to generalize the idea to more "complicated" models!
+
+At the core, we use maximum likelihood estimation: We maximize the probability of predicting right. What does this mean? The derivation of the choice probabilities $P_{nit}$ follows from random utility theory and answers the question \textit{What is the probability of observing individual $n$ choosing alternative $i$ in choice situation $t$} (given our assumptions about the underlying data generating process - our model). It should be intuitive to realize, that maximizing the sum of these probabilities is the same as finding the model parameters that maximize the probability of observing all the revealed choices...
+
+For a fantastic introduction to maximum likelihood estimation consult the vignette \textit{Getting started with maximum likelihood and maxLik}
+
+<<eval=FALSE>>=
+browseVignettes("maxLik")
+@
+
+\section{The choice probability}
+
+Recall that the choice probability $P_{nit}$ is
+\begin{equation}
+\label{eq:choice_probability}
+P_{nit} = \frac{X_{nit}}{\sum_{j} X_{njt}}
+\end{equation}
+where $X_{njt}\beta$ reflects the assumed utility relation $V_{njt} = U_{njt} - \epsilon_{njt}$.
+
+With a sample of $N$ decision makers, the probability that the choice of person $n$ is observed can be represented as
+\begin{equation}
+\label{eq:likelihood}
+L(\beta) = \prod_{n}^{N} \prod_{t}^{T_n} \prod_{i}^{I_{nt}} (P_{nit})^{y_{nit}}
+\end{equation}
+where $y_{ni}=1$ if person $n$ chooses $i$ and zero otherwise. Note, that $T_n$ indicates that not every individual must have the same number of choice situations and $I_{nt}$ indicates, that not all alternatives must be available to all individuals in all choice situations. In our simple example however, these so-called availabilities are constant...
+
+And as mentioned above this is exactly the funtion we want to maximize. Computationally, it is usually beneficial to remove the product operators by taking the logarithm which is a monotonic transformation, i.e. the maximum does not change: $\max{f(x)} = \max{\log({f(x)}})$.
+
+\begin{equation}
+\label{eq:log_likelihood}
+LL(\beta) = \sum_{n}^{N} \sum_{t}^{T_n} \sum_{i}^{I_{nt}} y_{nit} \log(P_{nit})
+\end{equation}
+
+So far, this has only been some algebra and statistics. Almost any econometric model yields a (log-) likelihood function and if we do not care about the mathematics we can take it for granted. The only thing we are left to do is find the parameter values which maximize the above log-likelihood function! Recall, that our parameters of interest are the utility weights, i.e. the $\beta$s in \eqref{eq:choice_probability}.
+
+\section{Implementation in R}
+
+We use some sample data for illustration
+
+<<>>=
+data("Train", package = "mlogit")
+
+# consult the data documentation
+?mlogit::Train
+@
+
+We use the following utility (here $U_A$ really is $V_{nit}$...) specification where individuals face the two mode alternatives A and B
+\begin{align*}
+\label{eq:utility}
+U_A &= \beta_{price} * price_A / 1000 + \beta_{time} * time_A / 60 \\
+U_B &= ASC + \beta_{price} * price_B / 1000 + \beta_{timeB} * time_B / 60
+\end{align*}
+
+The function in \eqref{eq:log_likelihood} translates almost verbatim to \texttt{R} code.
+
+<<>>=
+loglik <- function(param) {
+  U_A <- param["B_price"] * Train$price_A / 1000 +
+    param["B_time"] * Train$time_A / 60
+
+  U_B <- param["asc"] + param["B_price"] * Train$price_B / 1000 +
+    param["B_timeB"] * Train$time_B / 60
+
+  # helpers
+  exp_A <- exp(U_A)
+  exp_B <- exp(U_B)
+  y_A <- as.numeric(Train$choice == "A")  # 1 if A is chosen, 0 otherwise
+  y_B <- as.numeric(Train$choice == "B")  # similar (1-y_A)
+
+  P_Ant <- exp_A / (exp_A + exp_B)
+  P_Bnt <- exp_B / (exp_A + exp_B)
+  sum(y_A * log(P_Ant) + y_B * log(P_Bnt))
+}
+@
+
+Now, we do not need to implement the (numerical) maximization routines ourselves but simply pass it to \texttt{maxLik} specifying the use of the Broyden-Fletcher-Goldfarb-Shanno algorithm
+
+<<>>=
+# define parameter vector (and starting values)
+param <- c(1, 1, 1, 1)
+param <- setNames(param, c("asc", "B_price", "B_time", "B_timeB"))
+
+# maximize the loglik function
+m <- maxLik::maxLik(loglik, start = param, method = "BFGS")
+
+# print model results
+summary(m)
+@
+
+\section{mixl comparison}
+
+The \texttt{mixl} package does more or less exactly this but codes the log-likelihood function in \texttt{C++} with the \texttt{Rcpp} package and parallelizes the computations (since the LL for each individal can be computed independently - however, in this simple MNL example, the vectorized computation is probably not much slower). Also the neat thing about \texttt{mixl} is the way one can specify utilities (as string) which are then parsed to the corresponding indirect utilities $V$.
+
+Here is the equivalent code that reproduces (almost) identical results using \texttt{mixl}
+
+<<>>=
+Train$ID <- Train$id
+Train$CHOICE <- as.numeric(Train$choice)
+
+mnl_test <- "
+	U_A = @B_price * $price_A / 1000 + @B_time * $time_A / 60;
+	U_B = @asc + @B_price * $price_B / 1000 + @B_timeB * $time_B / 60;
+	"
+
+model_spec <- mixl::specify_model(mnl_test, Train, disable_multicore=T)
+
+# only take starting values that are needed
+est <- stats::setNames(c(1, 1, 1, 1), c("asc", "B_price", "B_time", "B_timeB"))
+
+availabilities <- mixl::generate_default_availabilities(
+  Train, model_spec$num_utility_functions)
+
+model <- mixl::estimate(model_spec, est, Train, availabilities = availabilities)
+@
+
+Compare the model coefficients to our own implementation!
+
+<<>>=
+summary(model)
+@
+
+
+\section{Exercises}
+
+\begin{enumerate}
+  \item Benchmark the runtime of our all-in-R implementation to \texttt{mixl}.
+  \item If you know some \texttt{C++} try to write the \texttt{loglik} function with \texttt{Rcpp::cppFunction} and check the performance gain!
+  \item Try to implement a mixed MNL.
+\end{enumerate}
+
+\end{document}
