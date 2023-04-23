@@ -92,6 +92,8 @@ U_B &= ASC + \beta_{price} * price_B / 1000 + \beta_{timeB} * time_B / 60
 
 The function in \eqref{eq:choice_probability} and \eqref{eq:log_likelihood} translate almost verbatim to \texttt{R} code.
 
+\textit{Remark:} The logistic function could be implemented using `plogis`.
+
 <<>>=
 loglik <- function(param) {
   U_A <- param["B_price"] * Train$price_A / 1000 +
